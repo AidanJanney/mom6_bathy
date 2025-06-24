@@ -18,14 +18,17 @@ def _cell_center_to_layer_thickness(
     """
     # Check uniform sign of values
     check_sign = np.all(cell_centers > 0) or np.all(cell_centers < 0)
-    assert check_sign, "Value Error, cell center depths must be all positive or all negative."
+    assert check_sign, "Cell center depths must be all positive or all negative."
     
     # Convert to all positive values, sort, and check monotonicity
     # must be strictly monotonic, meaning no repeating values.
-    cell_centers = np.sort(np.abs(cell_centers))
+    cell_centers = np.abs(cell_centers)
     
     monotonic = np.all(np.diff(cell_centers) > 0)
-    assert monotonic, "Error, cell center depths must be strictly monotonic."
+    assert monotonic, "Cell center depths must be strictly monotonic."
+    
+    # put in increasing order
+    cell_centers = np.sort(cell_centers)
     
     # Convert from cell centers to layer thickness. 
     temp_data = np.diff(cell_centers, prepend = 0)
@@ -52,14 +55,17 @@ def _cell_interface_to_layer_thickness(
     """
     # Check uniform sign of values
     check_sign = np.all(cell_interfaces >= 0) or np.all(cell_interfaces <= 0)
-    assert check_sign, "Value Error, cell interface depths must be all positive or all negative (one value, the surface interface, can be 0)."
+    assert check_sign, "Cell interface depths must be all positive or all negative (one value, the surface interface, can be 0)."
     
     # Convert to all positive values and check monotonicity
     # must be strictly monotonic, meaning no repeating values.
-    cell_interfaces = np.sort(np.abs(cell_interfaces))
+    cell_interfaces = np.abs(cell_interfaces)
     
-    monotonic = np.all(np.diff(cell_interfaces) >= 0)
-    assert monotonic, "Error, cell interface depths must be strictly monotonic."
+    monotonic = np.all(np.diff(cell_interfaces) > 0)
+    assert monotonic, "Cell interface depths must be strictly monotonic."
+    
+    # put in increasing order
+    cell_interfaces = np.sort(cell_interfaces)
     
     # Convert cell interface depths to layer thickness
     layer_thickness = np.diff(cell_interfaces)
@@ -95,6 +101,9 @@ class VGrid:
         dz: np.ndarray
             Array of vertical grid spacings (meters)
         """
+        
+        assert np.all(dz > 0), "Layer thickness cannot be zero."
+        
         self.dz = dz
 
     @property
@@ -186,8 +195,8 @@ class VGrid:
     def from_file(
         cls, 
         filename: str, 
-        coordinate_name: str = "dz", 
-        coordinate_type: Literal["layer_thickness", "cell_center", "cell_interface"] = "layer_thickness"
+        variable_name: str = "dz", 
+        variable_type: Literal["layer_thickness", "cell_center", "cell_interface"] = "layer_thickness"
     ):
         """Create a vertical grid from an existing vertical grid file.
         
@@ -210,17 +219,19 @@ class VGrid:
         assert os.path.exists(filename), f"File {filename} does not exist"
         
         valid_coordinate_types = {"layer_thickness", "cell_center", "cell_interface"}
-        assert coordinate_type in valid_coordinate_types, f"Coordinate type {coordinate_type} is not a valid option from {valid_coordinate_types}"
+        assert variable_type in valid_coordinate_types, f"Coordinate type {variable_type} is not a valid option from {valid_coordinate_types}"
         
         ds = xr.open_dataset(filename)
-        assert coordinate_name in ds, f"File {filename} does not contain a '{coordinate_name}' variable"
+        assert variable_name in ds, f"File {filename} does not contain a '{variable_name}' variable"
         
-        if coordinate_type == "layer_thickness":
-            dz = ds[coordinate_name].values
-        if coordinate_type == "cell_center":
-            dz = _cell_center_to_layer_thickness(ds[coordinate_name].values)
-        if coordinate_type == "cell_interface":
-            dz = _cell_interface_to_layer_thickness(ds[coordinate_name].values)
+        if variable_type == "layer_thickness":
+            dz = ds[variable_name].values
+        if variable_type == "cell_center":
+            dz = _cell_center_to_layer_thickness(ds[variable_name].values)
+        if variable_type == "cell_interface":
+            dz = _cell_interface_to_layer_thickness(ds[variable_name].values)
+            
+        assert np.all(dz > 0), "Layer thickness cannot be zero."
 
         return cls(dz)
 
