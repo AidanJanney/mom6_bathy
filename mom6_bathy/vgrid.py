@@ -51,7 +51,7 @@ def _cell_interface_to_layer_thickness(
         Depth of cell interfaces in meters. Needs to be strictly monotonic and surface interface must be at 0 meters. We will forcibly correct values to be positive and increasing with index.
     """
     # Check uniform sign of values
-    check_sign = np.all(cell_interfaces >= 0) or np.all(cell_interfaces =< 0)
+    check_sign = np.all(cell_interfaces >= 0) or np.all(cell_interfaces <= 0)
     assert check_sign, "Value Error, cell interface depths must be all positive or all negative (one value, the surface interface, can be 0)."
     
     # Convert to all positive values and check monotonicity
