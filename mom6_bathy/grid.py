@@ -1,4 +1,5 @@
 import os
+import copy
 from datetime import datetime
 from typing import Optional
 import numpy as np
@@ -44,6 +45,8 @@ class Grid:
         y-distance between t points, centered at v
     angle: xr.DataArray
         angle grid makes with latitude line
+    angle_q: xr.DataArray
+        angle q-grid makes with latitude line
     tarea: xr.DataArray
         T-cell area
 
@@ -138,17 +141,6 @@ class Grid:
             displace_pole=displace_pole,
         )
 
-
-    @property
-    def name(self) -> str:
-        """Name of the grid."""
-        return self._name
-    
-    @name.setter
-    def name(self, new_name: str) -> None:
-        assert new_name is None or new_name.replace("_", "").isalnum(), "Grid name must be alphanumeric"
-        self._name = new_name
-
     @staticmethod
     def check_supergrid(supergrid: xr.Dataset) -> None:
         """
@@ -232,13 +224,16 @@ class Grid:
 
 
     @classmethod
-    def from_supergrid(cls, path: str) -> "Grid":
+    def from_supergrid(cls, path: str, name: Optional[str] = None) -> "Grid":
         """Create a Grid instance from a supergrid file.
 
         Parameters
         ----------
         path : str
             Path to the supergrid file to be written
+        name : str, optional
+            Name of the new grid. If provided, it will be used as the name of the grid.
+            If not provided, the name will be derived from the file name.
 
         Returns
         -------
@@ -257,6 +252,8 @@ class Grid:
 
         srefine = 2  # supergrid refinement factor
 
+        name = name or os.path.basename(path).replace(".nc", "") if os.path.basename(path).endswith(".nc") else os.path.basename(path)
+
         # create an initial Grid object:
         obj = cls(
             nx=int(len(ds.nx) / srefine),
@@ -264,6 +261,7 @@ class Grid:
             lenx=(ds.x.max() - ds.x.min()).item(),
             leny=(ds.y.max() - ds.y.min()).item(),
             cyclic_x=Grid.is_cyclic_x(ds),
+            name=name
         )
 
         # override obj.supergrid with the data from the original supergrid file
@@ -279,77 +277,6 @@ class Grid:
 
         return obj
 
-    @classmethod
-    def subgrid_from_supergrid(cls, path: str, llc: tuple[float, float], urc: tuple[float, float], name: str) -> "Grid":
-        """Create a Grid instance from a subset of a supergrid file.
-
-        Parameters
-        ----------
-        path : str
-            Path to the full supergrid file to be carved out.
-        llc : tuple[float, float]
-            Lower left corner coordinates (lat, lon) of the subdomain to extract
-        urc : tuple[float, float]
-            Upper right corner coordinates (lat, lon) of the subset to extract
-        name : str
-            Name of the subgrid
-
-        Returns
-        -------
-        Grid
-            The Grid instance created from the supergrid file.
-        """
-
-        full_grid = cls.from_supergrid(path)
-
-        assert len(llc) == 2, "llc must be a tuple of two floats"
-        assert len(urc) == 2, "urc must be a tuple of two floats"
-
-        # subgrid indices
-        llc_j, llc_i = full_grid.get_indices(llc[0], llc[1])
-        urc_j, urc_i = full_grid.get_indices(urc[0], urc[1])
-
-        assert llc_j < urc_j, "Lower left corner must be below upper right corner"
-        assert llc_i < urc_i, "Lower left corner must be to the left of upper right corner"
-
-        srefine = 2  # supergrid refinement factor
-
-        # sub-supergrid indices:
-        y0 = llc_j * srefine
-        y1 = (urc_j + 1) * srefine
-        x0 = llc_i * srefine
-        x1 = (urc_i + 1) * srefine
-
-        # create the sub supergrid
-        sub_supergrid = MidasSupergrid(
-            config=full_grid.supergrid.dict["config"],
-            axis_units=full_grid.supergrid.dict["axis_units"],
-            xdat = full_grid.supergrid.x[y0:y1+1, x0:x1+1],
-            ydat = full_grid.supergrid.y[y0:y1+1, x0:x1+1],
-            cyclic_x=full_grid._supergrid.dict["cyclic_x"] and (x0 == 0) and (x1 == full_grid.supergrid.x.shape[1]),
-            cyclic_y=full_grid._supergrid.dict["cyclic_y"] and (y0 == 0) and (y1 == full_grid.supergrid.y.shape[0]),
-            tripolar_n=full_grid._supergrid.dict["tripolar_n"],
-            r0_pole=full_grid._supergrid.dict["r0_pole"],
-            lon0_pole=full_grid._supergrid.dict["lon0_pole"],
-            doughnut=full_grid._supergrid.dict["doughnut"],
-            radius=full_grid._supergrid.dict["radius"],
-        )
-
-        # Create the sub grid based on the sub supergrid
-        sub_grid = cls(
-            nx = (urc_i - llc_i),
-            ny = (urc_j - llc_j),
-            lenx = (sub_supergrid.x.max() - sub_supergrid.x.min()).item(),
-            leny = (sub_supergrid.y.max() - sub_supergrid.y.min()).item(),
-            cyclic_x = sub_supergrid.dict["cyclic_x"],
-            name = name
-        )
-
-        # override sub_grid.supergrid with the sub supergrid data
-        sub_grid.supergrid = sub_supergrid
-
-        return sub_grid
-        
     @property
     def supergrid(self) -> MidasSupergrid:
         """MOM6 supergrid contains the grid metrics and the areas at twice the
@@ -376,7 +303,7 @@ class Grid:
     def _compute_MOM6_grid_metrics(self):
         """Compute the MOM6 grid metrics from the supergrid metrics. These 
         include the tlon, tlat, ulon, ulat, vlon, vlat, qlon, qlat, dxt, dyt,
-        dxCv, dyCu, dxCu, dyCv, angle, and tarea."""
+        dxCv, dyCu, dxCu, dyCv, angle, angle_q, and tarea."""
 
         sg = self._supergrid
         sg_units = sg.dict["axis_units"]
@@ -505,6 +432,12 @@ class Grid:
             attrs={"name": "angle grid makes with latitude line", "units": "degrees"},
         )
 
+        # q angle
+        self.angle_q = xr.DataArray(
+            sg.angle_dx[::2, ::2],
+            dims=["ny", "nx"],
+            attrs={"name": "angle q-grid makes with latitude line", "units": "degrees"},
+        )
         # T area
         self.tarea = xr.DataArray(
             sg.area[::2, ::2]
@@ -515,8 +448,8 @@ class Grid:
             attrs={"name": "area of t-cells", "units": "meters^2"},
         )
 
-        # create a KDTree for fast nearest neighbor search
-        self._kdtree = cKDTree(np.column_stack((self.tlat.values.flatten(), self.tlon.values.flatten())))
+        # reset _kdtree such that it is recomputed when self.kdtree is accessed again
+        self._kdtree = None
 
     def get_indices(self, tlat: float, tlon: float) -> tuple[int, int]:
         """
@@ -534,18 +467,8 @@ class Grid:
         Tuple[int, int]
             The j, i indices of the given tlat and tlon pair.
         """
-
-        max_tlon = self.tlon.max()
-        min_tlon = self.tlon.min()
-
-        # Try to adjust the longitude to the range of the grid (if possible)
-        if tlon > max_tlon and (tlon - 360.0) > min_tlon:
-            tlon -= 360.0
-        elif tlon < min_tlon and (tlon + 360.0) < max_tlon:
-            tlon += 360.0
-
         dist, indices = self._kdtree.query([tlat, tlon])
-        j, i = np.unravel_index(indices, self.tlat.shape)
+        i, j = np.unravel_index(indices, self.tlat.shape)
         return int(j), int(i)
 
     def plot(self, property_name):
